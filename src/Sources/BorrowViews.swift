@@ -75,9 +75,18 @@ struct ConnectionRow: View {
             }
             // Partial limit: friend is online with some models, but a provider is
             // auto-paused by their reserve. (Full pause shows above via `paused`.)
-            if connection.online, !connection.revoked, !connection.paused, !connection.limitedProviders.isEmpty {
-                Text("\(connection.limitedProviders.joined(separator: " & ")) paused (their session limit) — other models still available.")
+            if connection.online, !connection.revoked, !connection.paused,
+               let limited = connection.limitedText {
+                Text(limited)
                     .font(.caption2).foregroundStyle(.orange)
+            }
+            // Host shares live session usage: show where each provider stands, so a
+            // squeeze is visible before it turns into a failed request. Only ever
+            // populated when the host chose the "windows" level.
+            if connection.online, !connection.revoked {
+                ForEach(connection.sessionBars) { bar in
+                    sessionBar(bar)
+                }
             }
             if !connection.revoked, connection.hasLimit {
                 VStack(alignment: .leading, spacing: 3) {
@@ -106,6 +115,26 @@ struct ConnectionRow: View {
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+    }
+
+    /// One provider's session window on the friend's side: "Codex 87% used ·
+    /// resets in 41m" over a bar that turns orange as it approaches their cutoff.
+    @ViewBuilder
+    private func sessionBar(_ bar: ProviderShare) -> some View {
+        let pct = bar.percentUsed ?? 0
+        let tint: Color = bar.limited ? .orange : (pct >= 80 ? .yellow : .secondary)
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Text(bar.provider).font(.caption2)
+                Text("\(pct)% used").font(.caption2).foregroundStyle(tint)
+                Spacer()
+                if let reset = bar.resetText {
+                    Text(reset).font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            ProgressView(value: Double(pct), total: 100)
+                .progressViewStyle(.linear).tint(tint)
+        }
     }
 
     private var allotmentText: String {

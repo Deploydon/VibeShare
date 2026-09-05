@@ -96,6 +96,7 @@ func (c *ControlServer) getStatus(w http.ResponseWriter, r *http.Request) {
 		"sharingEnabled":      cfg.EnableSharing,
 		"autoStopSharing":     cfg.AutoStopSharing,
 		"usageReservePercent": cfg.UsageReservePercent,
+		"shareUsageLevel":     cfg.shareUsageLevel(),
 		"upstream": map[string]any{
 			"url":       cfg.UpstreamURL,
 			"reachable": c.upstream.Reachable(),
@@ -261,22 +262,23 @@ func (c *ControlServer) deleteGrant(w http.ResponseWriter, r *http.Request) {
 }
 
 type connectionView struct {
-	ID               string   `json:"id"`
-	Label            string   `json:"label"`
-	RedeemedAt       int64    `json:"redeemedAt"`
-	Online           bool     `json:"online"`
-	Routing          bool     `json:"routing"`
-	Revoked          bool     `json:"revoked"`
-	Paused           bool     `json:"paused"`                     // host paused sharing (still online)
-	PausedReason     string   `json:"pausedReason,omitempty"`     // why, if the host said (e.g. usage limit)
-	LimitedProviders []string `json:"limitedProviders,omitempty"` // providers auto-paused by the host's reserve
-	HostName         string   `json:"hostName"`
-	Models           []string `json:"models"`
-	TotalReqs        int      `json:"totalReqs"`
-	InputTokens      int64    `json:"inputTokens"`
-	OutputTokens     int64    `json:"outputTokens"`
-	TokenLimit       int64    `json:"tokenLimit"` // host-advertised allotment (0 = unlimited)
-	TokensUsed       int64    `json:"tokensUsed"` // host-authoritative usage
+	ID               string               `json:"id"`
+	Label            string               `json:"label"`
+	RedeemedAt       int64                `json:"redeemedAt"`
+	Online           bool                 `json:"online"`
+	Routing          bool                 `json:"routing"`
+	Revoked          bool                 `json:"revoked"`
+	Paused           bool                 `json:"paused"`                     // host paused sharing (still online)
+	PausedReason     string               `json:"pausedReason,omitempty"`     // why, if the host said (e.g. usage limit)
+	LimitedProviders []string             `json:"limitedProviders,omitempty"` // providers auto-paused by the host's reserve
+	Usage            []providerUsageShare `json:"usage,omitempty"`            // host session windows, as far as they opted to share
+	HostName         string               `json:"hostName"`
+	Models           []string             `json:"models"`
+	TotalReqs        int                  `json:"totalReqs"`
+	InputTokens      int64                `json:"inputTokens"`
+	OutputTokens     int64                `json:"outputTokens"`
+	TokenLimit       int64                `json:"tokenLimit"` // host-advertised allotment (0 = unlimited)
+	TokensUsed       int64                `json:"tokensUsed"` // host-authoritative usage
 }
 
 func (c *ControlServer) listConnections(w http.ResponseWriter, r *http.Request) {
@@ -298,6 +300,7 @@ func (c *ControlServer) listConnections(w http.ResponseWriter, r *http.Request) 
 			Paused:           !revoked && st.Paused,
 			PausedReason:     st.PausedReason,
 			LimitedProviders: nonNil(st.LimitedProviders),
+			Usage:            st.Usage,
 			HostName:         st.HostName,
 			Models:           nonNil(models),
 			TotalReqs:        st.TotalReqs,
@@ -391,6 +394,9 @@ func (c *ControlServer) putConfig(w http.ResponseWriter, r *http.Request) {
 	if cfg.UsageReservePercent > 95 {
 		cfg.UsageReservePercent = 95
 	}
+	// Collapse an unknown level to the default rather than persisting a value
+	// nothing reads — otherwise a typo would silently disable the disclosure.
+	cfg.ShareUsageLevel = cfg.shareUsageLevel()
 	if err := c.store.SetConfig(cfg); err != nil {
 		http.Error(w, "save failed", http.StatusInternalServerError)
 		return

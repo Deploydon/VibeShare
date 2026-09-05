@@ -240,6 +240,17 @@ final class AppController: ObservableObject {
         await refresh()
     }
 
+    /// Choose how much of your own subscription state friends see alongside the
+    /// pause they can already observe: nothing, reset times, or live windows.
+    func setUsageShareLevel(_ level: UsageShareLevel) async {
+        do {
+            try await client.updateConfig(RouterConfigUpdate(shareUsageLevel: level.rawValue))
+        } catch {
+            softError = error.localizedDescription
+        }
+        await refresh()
+    }
+
     /// Replace the signaling relay set. Relays are read at router start, so the
     /// router is restarted afterwards (the UI shows it reconnecting).
     func setRelays(_ relays: [String]) async -> Bool {

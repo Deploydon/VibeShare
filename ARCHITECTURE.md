@@ -75,7 +75,7 @@ tagged `["d", roomID]` and a `t` type. All content is sealed with `announceKey`.
 
 | `t`        | direction    | content (decrypted JSON)                                                    |
 |------------|--------------|-----------------------------------------------------------------------------|
-| `presence` | host → room  | `{role:"host", name, models:[...], paused?, revoked?, tokenLimit?, tokensUsed?, ts}` |
+| `presence` | host → room  | `{role:"host", name, models:[...], paused?, revoked?, limited?, usage?, tokenLimit?, tokensUsed?, ts}` |
 | `presence` | guest → room | `{role:"guest", peer, routing, ts}`                                         |
 | `signal`   | both         | `{from, session, kind:"offer"\|"answer"\|"ice", payload}`                   |
 
@@ -140,6 +140,13 @@ A grant can be **paused**: the host keeps broadcasting presence (with
 `paused:true` and no models) but refuses requests, so the guest sees "paused"
 rather than "offline" and the code survives to be resumed — unlike revoke,
 which kills the code permanently.
+
+The reserve gate can auto-pause a provider whose 5-hour session window passes
+the host's threshold; presence then names it in `limited`. How much context rides
+along is the host's choice (`shareUsageLevel`): nothing, the paused provider's
+reset time, or the live session percentage for the providers behind that grant.
+Disclosure never exceeds the grant's own providers, so a Claude-only grant learns
+nothing about the host's Codex quota.
 
 When a grant is **revoked**, the host publishes a terminal presence with
 `revoked:true` before leaving the room. Guests persist that state on the held

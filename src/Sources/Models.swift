@@ -10,6 +10,7 @@ struct RouterStatus: Codable {
     var sharingEnabled: Bool
     var autoStopSharing: Bool?
     var usageReservePercent: Int?
+    var shareUsageLevel: String?
     var upstream: UpstreamStatus
     var nostr: NostrStatus
     var localModels: [String]?
@@ -34,6 +35,9 @@ struct RouterStatus: Codable {
     /// Session-reserve gate state (host keeps a buffer of each provider's quota).
     var autoStopSharingOn: Bool { autoStopSharing ?? false }
     var usageReserve: Int { usageReservePercent ?? 20 }
+    /// How much of your own subscription friends see: "off" | "resets" | "windows".
+    /// An absent or unrecognized value means the router's default, "resets".
+    var usageShareLevel: UsageShareLevel { UsageShareLevel(rawValue: shareUsageLevel ?? "") ?? .resets }
 }
 
 /// One provider's subscription window state, fetched by the router from that
@@ -77,6 +81,57 @@ struct UsageWindow: Codable, Identifiable {
         iso.formatOptions = [.withInternetDateTime]
         let stripped = s.replacingOccurrences(of: #"\.\d+"#, with: "", options: .regularExpression)
         return iso.date(from: stripped)
+    }
+}
+
+/// How much of the host's own subscription state rides along with presence.
+/// Ordered by disclosure so the picker reads as a single dial.
+enum UsageShareLevel: String, CaseIterable, Identifiable {
+    case off, resets, windows
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .off: return "Nothing"
+        case .resets: return "When a paused provider is back"
+        case .windows: return "Live session usage"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .off:
+            return "Friends still see that a provider is paused — they just aren't told when it lifts."
+        case .resets:
+            return "Adds the time a paused provider comes back. Never how much of your subscription is left."
+        case .windows:
+            return "Shares the percentage used of each session window you're sharing, so friends can see a squeeze coming instead of hitting it mid-task."
+        }
+    }
+}
+
+/// One provider's session window as a host chose to disclose it. `utilization`
+/// is nil when the host shares reset times only, which is why this isn't just a
+/// UsageWindow — "no number shared" has to be distinguishable from "0% used".
+struct ProviderShare: Codable, Identifiable {
+    var provider: String
+    var limited: Bool
+    var utilization: Double?
+    var resetsAt: String
+
+    var id: String { provider }
+    var percentUsed: Int? { utilization.map { Int(min(max($0, 0), 100).rounded()) } }
+
+    /// "resets in 1h 20m", or nil when no usable timestamp came across.
+    var resetText: String? { UsageWindow(label: "", utilization: 0, resetsAt: resetsAt).resetText }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        provider = try c.decodeIfPresent(String.self, forKey: .provider) ?? ""
+        limited = try c.decodeIfPresent(Bool.self, forKey: .limited) ?? false
+        utilization = try c.decodeIfPresent(Double.self, forKey: .utilization)
+        resetsAt = try c.decodeIfPresent(String.self, forKey: .resetsAt) ?? ""
     }
 }
 
@@ -141,6 +196,7 @@ struct ConnectionView: Codable, Identifiable {
     var paused: Bool // host paused sharing (still online)
     var pausedReason: String // why the host is paused (e.g. usage limit), "" if not given
     var limitedProviders: [String] // providers the host auto-paused by reserve (partial or full)
+    var usage: [ProviderShare] // host's session windows, as far as they chose to share
     var hostName: String
     var models: [String]
     var totalReqs: Int
@@ -153,6 +209,28 @@ struct ConnectionView: Codable, Identifiable {
 
     /// Whether the host capped this connection's allotment.
     var hasLimit: Bool { tokenLimit > 0 }
+    /// The limited-provider notice, e.g. "Codex paused (their session limit,
+    /// resets in 1h 20m)". Falls back to the plain wording when the host doesn't
+    /// share reset times or the timestamp can't be parsed.
+    var limitedText: String? {
+        guard !limitedProviders.isEmpty else { return nil }
+        let names = limitedProviders.joined(separator: " & ")
+        let resets = usage
+            .filter { $0.limited }
+            .compactMap { $0.resetText }
+        // Only show a single shared time; two providers rarely reset together and
+        // naming which is which would need more room than this one line has.
+        if resets.count == 1, let only = resets.first {
+            return "\(names) paused (their session limit, \(only)) — other models still available."
+        }
+        return "\(names) paused (their session limit) — other models still available."
+    }
+
+    /// The session windows worth drawing a bar for — only providers whose host
+    /// shared an actual number (the "windows" level). Empty at every other level,
+    /// which is what keeps the borrow card unchanged for hosts who didn't opt in.
+    var sessionBars: [ProviderShare] { usage.filter { $0.utilization != nil } }
+
     /// Tokens left in your allotment (guest side: uses the host's authoritative
     /// tally, which is what the host actually enforces). Only meaningful when
     /// `hasLimit`.
@@ -169,6 +247,7 @@ struct ConnectionView: Codable, Identifiable {
         paused = try c.decodeIfPresent(Bool.self, forKey: .paused) ?? false
         pausedReason = try c.decodeIfPresent(String.self, forKey: .pausedReason) ?? ""
         limitedProviders = try c.decodeIfPresent([String].self, forKey: .limitedProviders) ?? []
+        usage = try c.decodeIfPresent([ProviderShare].self, forKey: .usage) ?? []
         hostName = try c.decodeIfPresent(String.self, forKey: .hostName) ?? ""
         models = try c.decodeIfPresent([String].self, forKey: .models) ?? []
         totalReqs = try c.decodeIfPresent(Int.self, forKey: .totalReqs) ?? 0
@@ -185,6 +264,7 @@ struct RouterConfigUpdate: Encodable {
     var enableSharing: Bool? = nil
     var autoStopSharing: Bool? = nil
     var usageReservePercent: Int? = nil
+    var shareUsageLevel: String? = nil
 }
 
 /// One routed request in the live activity feed (mirrors the router's

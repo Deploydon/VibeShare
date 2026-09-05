@@ -40,13 +40,29 @@ type presenceContent struct {
 	Models           []string `json:"models,omitempty"` // models the host is sharing via this grant
 	Peer             string   `json:"peer,omitempty"`   // guest's ephemeral session id
 	Routing          bool     `json:"routing,omitempty"`
-	Revoked          bool     `json:"revoked,omitempty"`    // host→guest: grant was revoked permanently
-	Paused           bool     `json:"paused,omitempty"`     // host→guest: sharing temporarily paused (still online)
-	Reason           string   `json:"reason,omitempty"`     // host→guest: why fully paused (e.g. session usage limit)
-	LimitedProviders []string `json:"limited,omitempty"`    // host→guest: providers auto-paused by the reserve (partial or full)
-	TokenLimit       int64    `json:"tokenLimit,omitempty"` // host→guest: this friend's allotment (0 = unlimited)
-	TokensUsed       int64    `json:"tokensUsed,omitempty"` // host→guest: authoritative tokens consumed so far
-	TS               int64    `json:"ts"`
+	Revoked          bool     `json:"revoked,omitempty"` // host→guest: grant was revoked permanently
+	Paused           bool     `json:"paused,omitempty"`  // host→guest: sharing temporarily paused (still online)
+	Reason           string   `json:"reason,omitempty"`  // host→guest: why fully paused (e.g. session usage limit)
+	LimitedProviders []string `json:"limited,omitempty"` // host→guest: providers auto-paused by the reserve (partial or full)
+	// Usage carries the host's own session-window state for the providers behind
+	// this grant, so the guest can say *when* a pause lifts — and, at the most
+	// open setting, see the squeeze coming before it costs them a request. Sent
+	// only as far as Config.ShareUsageLevel allows: empty at "off", reset times
+	// for already-paused providers at "resets", full windows at "windows".
+	Usage      []providerUsageShare `json:"usage,omitempty"`
+	TokenLimit int64                `json:"tokenLimit,omitempty"` // host→guest: this friend's allotment (0 = unlimited)
+	TokensUsed int64                `json:"tokensUsed,omitempty"` // host→guest: authoritative tokens consumed so far
+	TS         int64                `json:"ts"`
+}
+
+// providerUsageShare is one provider's session window as disclosed to a guest.
+// Utilization is omitted (not zero) at the "resets" level, so a guest can tell
+// "0% used" from "the host didn't share a number" and render accordingly.
+type providerUsageShare struct {
+	Provider    string   `json:"provider"`              // display name, e.g. "Codex"
+	Limited     bool     `json:"limited,omitempty"`     // reserve gate has paused this provider
+	Utilization *float64 `json:"utilization,omitempty"` // percent of the session window used, 0..100
+	ResetsAt    string   `json:"resetsAt,omitempty"`    // RFC3339, "" when unknown
 }
 
 // frame is a JSON message sent over the WebRTC DataChannel.

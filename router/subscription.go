@@ -76,8 +76,7 @@ func newSubscriptionMonitor(authDir string) *SubscriptionMonitor {
 		client:  &http.Client{Timeout: 10 * time.Second},
 		sources: []usageSource{
 			{key: "claude", credFile: credMatch("claude-"), fetch: fetchClaudeUsage},
-			// Codex is best-effort: implemented from public docs but not verified
-			// against a live account. It stays inert until codex creds exist.
+			// Codex stays inert until codex creds exist.
 			{key: "codex", credFile: credMatchAny("codex-", "chatgpt-"), fetch: fetchCodexUsage},
 		},
 		snaps:  map[string]ProviderUsage{},
@@ -130,6 +129,24 @@ func (m *SubscriptionMonitor) SessionUtilization(provider string) (float64, bool
 		}
 	}
 	return 0, false
+}
+
+// SessionResetsAt returns the RFC3339 reset timestamp of the provider's 5-hour
+// session window, or "" when unknown. Cache-only, like SessionUtilization: it
+// adds no network calls to the presence path.
+func (m *SubscriptionMonitor) SessionResetsAt(provider string) string {
+	m.mu.Lock()
+	snap, ok := m.snaps[provider]
+	m.mu.Unlock()
+	if !ok || snap.UpdatedAt == 0 {
+		return ""
+	}
+	for _, w := range snap.Windows {
+		if strings.HasPrefix(strings.ToLower(w.Label), "session") {
+			return w.ResetsAt
+		}
+	}
+	return ""
 }
 
 // Refresh forces an immediate, synchronous usage fetch for one provider,
@@ -355,10 +372,10 @@ type claudeWindow struct {
 	ResetsAt    string  `json:"resets_at"`
 }
 
-// fetchCodexUsage queries ChatGPT's Codex usage endpoint. BEST-EFFORT / UNVERIFIED:
-// built from public docs (CodexBar, openai/codex) but not tested against a live
-// Codex account — field names and the account-id header may need adjusting. It
-// parses defensively across the plausible response shapes.
+// fetchCodexUsage queries ChatGPT's Codex usage endpoint. Originally written from
+// public docs (CodexBar, openai/codex); since confirmed against a live Codex
+// account, whose session window drives the reserve gate correctly. The response
+// shape is still parsed defensively, since it is undocumented and may change.
 func fetchCodexUsage(c *http.Client, cr rawCred) (ProviderUsage, int, error) {
 	req, err := http.NewRequest(http.MethodGet, "https://chatgpt.com/backend-api/wham/usage", nil)
 	if err != nil {

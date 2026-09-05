@@ -118,6 +118,30 @@ struct SettingsTab: View {
             Text("When a provider's session passes \(max(0, 100 - Int(reserve)))% used, its models stop being shared and resume automatically once the window resets.")
                 .font(.caption2).foregroundStyle(.secondary)
             sessionUsageReadout
+            usageSharePicker
+        }
+    }
+
+    /// How much of your own subscription friends see. Friends are always told a
+    /// provider is paused; this dial is only about how much context comes with it.
+    @ViewBuilder
+    private var usageSharePicker: some View {
+        let level = controller.status?.usageShareLevel ?? .resets
+        VStack(alignment: .leading, spacing: 4) {
+            Picker("Tell friends", selection: Binding(
+                get: { level },
+                set: { new in
+                    guard new != level else { return }
+                    Task { await controller.setUsageShareLevel(new) }
+                })) {
+                    ForEach(UsageShareLevel.allCases) { l in
+                        Text(l.title).tag(l)
+                    }
+                }
+                .pickerStyle(.menu)
+                .font(.subheadline)
+            Text(level.detail)
+                .font(.caption2).foregroundStyle(.secondary)
         }
     }
 

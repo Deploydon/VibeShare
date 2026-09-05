@@ -43,6 +43,18 @@ type Config struct {
 	// window pauses Claude sharing while Codex keeps flowing (and vice versa).
 	AutoStopSharing     bool `json:"autoStopSharing"`
 	UsageReservePercent int  `json:"usageReservePercent"` // 1..95, the buffer kept for myself
+
+	// ShareUsageLevel controls how much of your own subscription state friends
+	// see alongside the pause they can already observe:
+	//
+	//	"off"     nothing beyond today's "Codex paused"
+	//	"resets"  + when that paused provider comes back (no utilization figure)
+	//	"windows" + the live session percentage, so a friend can see a squeeze
+	//	          coming instead of discovering it as a failed request mid-task
+	//
+	// Defaults to "resets", which only times a pause the guest is already told
+	// about. Read it through Config.shareUsageLevel, never directly.
+	ShareUsageLevel string `json:"shareUsageLevel"`
 }
 
 func defaultConfig() Config {
@@ -59,7 +71,26 @@ func defaultConfig() Config {
 		EnableSharing:       true,
 		AutoStopSharing:     false,
 		UsageReservePercent: 20,
+		ShareUsageLevel:     shareUsageResets,
 	}
+}
+
+// Levels for Config.ShareUsageLevel, in increasing order of disclosure.
+const (
+	shareUsageOff     = "off"     // guests learn nothing beyond "this provider is paused"
+	shareUsageResets  = "resets"  // + when an already-paused provider resets
+	shareUsageWindows = "windows" // + the live session percentage for shared providers
+)
+
+// shareUsageLevel returns the configured level, mapping an empty or unrecognized
+// value (an old config file, a hand edit) to the "resets" default rather than
+// failing open to the most detailed setting.
+func (c Config) shareUsageLevel() string {
+	switch c.ShareUsageLevel {
+	case shareUsageOff, shareUsageResets, shareUsageWindows:
+		return c.ShareUsageLevel
+	}
+	return shareUsageResets
 }
 
 // Grant is a share I issued (host role). The secret code is stored so the room
@@ -134,6 +165,9 @@ func openStore(dir string) (*Store, error) {
 	}
 	if len(s.config.NostrRelays) == 0 {
 		s.config.NostrRelays = append([]string(nil), defaultNostrRelays...)
+	}
+	if s.config.ShareUsageLevel == "" {
+		s.config.ShareUsageLevel = shareUsageResets
 	}
 	if s.config.UsageReservePercent == 0 {
 		s.config.UsageReservePercent = 20 // sane default for the slider before it's touched

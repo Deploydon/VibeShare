@@ -337,6 +337,65 @@ func (h *HostManager) applyUsageReserve(models []string, allowAll bool) (out []s
 	return kept, false, limited
 }
 
+// usageShare builds the subscription disclosure that rides along with presence,
+// clamped to whatever level the host chose:
+//
+//	off      nothing — the guest still sees LimitedProviders, as it always has
+//	resets   only the reset time of a provider ALREADY disclosed as limited, so
+//	         "Codex paused" gains a "back in 40m" and nothing else
+//	windows  the live session percentage for every monitored provider behind
+//	         this grant, limited or not — the only level that warns a friend
+//	         before a squeeze rather than after it costs them a request
+//
+// `limited` is what the reserve gate paused; `models` is what this grant is
+// actually advertising. Together they bound disclosure to providers this friend
+// can see anyway: a grant sharing only Claude never learns about Codex.
+func (h *HostManager) usageShare(limited, models []string) []providerUsageShare {
+	if h.subUsage == nil {
+		return nil
+	}
+	level := h.store.Config().shareUsageLevel()
+	if level == shareUsageOff {
+		return nil
+	}
+	isLimited := make(map[string]bool, len(limited))
+	for _, name := range limited {
+		isLimited[name] = true
+	}
+	// A limited provider's models are gone from `models` (the gate removed them),
+	// so relevance is the union: still serving here, or paused out of here.
+	relevant := map[string]bool{}
+	for _, m := range models {
+		if p := monitoredProviderForModel(m); p != "" {
+			relevant[p] = true
+		}
+	}
+	var out []providerUsageShare
+	for _, p := range monitoredUsageProviders { // stable, human order
+		name := providerDisplayName(p)
+		if !relevant[p] && !isLimited[name] {
+			continue
+		}
+		// At "resets" the disclosure is strictly a timestamp on a pause the guest
+		// is already told about, so an unlimited provider contributes nothing.
+		if level == shareUsageResets && !isLimited[name] {
+			continue
+		}
+		row := providerUsageShare{Provider: name, Limited: isLimited[name], ResetsAt: h.subUsage.SessionResetsAt(p)}
+		if level == shareUsageWindows {
+			if util, known := h.subUsage.SessionUtilization(p); known {
+				row.Utilization = &util
+			}
+		}
+		// Nothing known about this provider yet: don't announce an empty row.
+		if row.ResetsAt == "" && row.Utilization == nil {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
 // providerDisplayName turns a provider key into the label shown in the UI.
 func providerDisplayName(key string) string {
 	switch key {
@@ -466,6 +525,7 @@ func (h *HostManager) buildPresence(hg *hostGrant) presenceContent {
 		Paused:           paused,
 		Reason:           reason,
 		LimitedProviders: limited,
+		Usage:            h.usageShare(limited, models),
 		TokenLimit:       h.store.GrantLimit(hg.grant.ID),
 		TokensUsed:       u.InputTokens + u.OutputTokens,
 		TS:               time.Now().Unix(),
