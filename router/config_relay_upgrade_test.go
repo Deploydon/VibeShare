@@ -111,3 +111,44 @@ func TestCustomRelaysStayUnchanged(t *testing.T) {
 		t.Fatal("opening a custom config rewrote it")
 	}
 }
+
+func TestRelayUpgradePreservesPopulatedUserState(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{NostrRelays: legacyDefaultRelayLists[0], IdentityName: "existing host", ShareUsageLevel: shareUsageOff, EnableSharing: true}
+	files := map[string]any{
+		"config.json":      cfg,
+		"grants.json":      []Grant{{ID: "existing-grant", Code: "secret-grant", TokenLimit: 12345, Paused: true}},
+		"connections.json": []Connection{{ID: "existing-connection", Code: "secret-borrow", Label: "friend"}},
+		"usage.json":       map[string]Usage{"existing-grant": {Requests: 7, InputTokens: 300, OutputTokens: 400}},
+	}
+	originals := map[string][]byte{}
+	for name, value := range files {
+		path := filepath.Join(dir, name)
+		if err := saveJSON(path, value); err != nil {
+			t.Fatal(err)
+		}
+		originals[name], _ = os.ReadFile(path)
+	}
+	for i := 0; i < 2; i++ {
+		store, err := openStore(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if store.Config().IdentityName != cfg.IdentityName || store.Config().shareUsageLevel() != shareUsageOff {
+			t.Fatal("identity or privacy changed")
+		}
+		for name, original := range originals {
+			if name == "config.json" {
+				continue
+			}
+			got, err := os.ReadFile(filepath.Join(dir, name))
+			if err != nil || !bytes.Equal(got, original) {
+				t.Fatalf("%s changed on startup: %v", name, err)
+			}
+		}
+	}
+	backup, err := os.ReadFile(filepath.Join(dir, "config.json.pre-1.1.1"))
+	if err != nil || !bytes.Equal(backup, originals["config.json"]) {
+		t.Fatal("rollback config did not preserve original")
+	}
+}

@@ -60,9 +60,8 @@ make fetch-provider
 make swift
 ./src/.build/debug/VibeShare      # menu-bar icon appears
 
-# 2b. …or build a distributable, signed VibeShare.app
-make app
-open VibeShare.app
+# 2b. Build, replace the installed app, and launch it (quit VibeShare first)
+make run
 
 # 2c. …or package a distributable disk image (VibeShare-<version>.dmg)
 make dmg                          # this machine's arch
@@ -177,7 +176,9 @@ notification preferences are still managed in the app's Settings tab.
 Subscription bars show every limit window returned by a connected provider,
 including separate model-family windows such as Claude's weekly Fable limit.
 Share cards show the host's windows for the providers in that grant. Borrow
-cards show the same windows when the friend's app sends them; a friend still
+cards show the same windows only when the host opts into the **windows**
+usage-sharing level. **Off** shares no subscription details; **resets** shares
+only reset times for providers paused by the reserve gate. A friend still
 running VibeShare 1.0 will not send these bars until they upgrade. These
 percentages describe the host's subscription, separate from the token
 allotment assigned to a particular friend.

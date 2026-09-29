@@ -64,8 +64,6 @@ type Config struct {
 	// when the local provider engine advertises the same model. Useful on a
 	// borrow-only Mac with an unusable local sign-in; defaults off for upgrades.
 	PreferBorrowedModels bool `json:"preferBorrowedModels"`
-	// ShareUsageLevel is preserved for the menu. The router does not interpret it.
-	ShareUsageLevel string `json:"shareUsageLevel,omitempty"`
 
 	// AutoStopSharing keeps a slice of each provider's subscription for the host:
 	// when a provider's 5-hour session window climbs past 100-UsageReservePercent,
@@ -74,6 +72,18 @@ type Config struct {
 	// window pauses Claude sharing while Codex keeps flowing (and vice versa).
 	AutoStopSharing     bool `json:"autoStopSharing"`
 	UsageReservePercent int  `json:"usageReservePercent"` // 1..95, the buffer kept for myself
+
+	// ShareUsageLevel controls how much of your own subscription state friends
+	// see alongside the pause they can already observe:
+	//
+	//	"off"     nothing beyond today's "Codex paused"
+	//	"resets"  + when that paused provider comes back (no utilization figure)
+	//	"windows" + the live session percentage, so a friend can see a squeeze
+	//	          coming instead of discovering it as a failed request mid-task
+	//
+	// Defaults to "resets", which only times a pause the guest is already told
+	// about. Read it through Config.shareUsageLevel, never directly.
+	ShareUsageLevel string `json:"shareUsageLevel"`
 }
 
 func defaultConfig() Config {
@@ -90,7 +100,26 @@ func defaultConfig() Config {
 		EnableSharing:       true,
 		AutoStopSharing:     false,
 		UsageReservePercent: 20,
+		ShareUsageLevel:     shareUsageResets,
 	}
+}
+
+// Levels for Config.ShareUsageLevel, in increasing order of disclosure.
+const (
+	shareUsageOff     = "off"     // guests learn nothing beyond "this provider is paused"
+	shareUsageResets  = "resets"  // + when an already-paused provider resets
+	shareUsageWindows = "windows" // + the live session percentage for shared providers
+)
+
+// shareUsageLevel returns the configured level, mapping an empty or unrecognized
+// value (an old config file, a hand edit) to the "resets" default rather than
+// failing open to the most detailed setting.
+func (c Config) shareUsageLevel() string {
+	switch c.ShareUsageLevel {
+	case shareUsageOff, shareUsageResets, shareUsageWindows:
+		return c.ShareUsageLevel
+	}
+	return shareUsageResets
 }
 
 // Grant is a share I issued (host role). The secret code is stored so the room
@@ -189,6 +218,9 @@ func openStore(dir string) (*Store, error) {
 				return nil, fmt.Errorf("save upgraded relay config: %w", err)
 			}
 		}
+	}
+	if s.config.ShareUsageLevel == "" {
+		s.config.ShareUsageLevel = shareUsageResets
 	}
 	if s.config.UsageReservePercent == 0 {
 		s.config.UsageReservePercent = 20 // sane default for the slider before it's touched

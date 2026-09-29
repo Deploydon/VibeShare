@@ -146,4 +146,4 @@ else
 fi
 
 echo -e "${GREEN}✅ Built $APP_DIR${NC}"
-echo "   Drag it to /Applications, or run: open '$APP_DIR'"
+echo "   Quit VibeShare, then run: make run (replaces /Applications/VibeShare.app)"

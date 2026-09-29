@@ -51,8 +51,8 @@ install: app ## Build and install to /Applications
 littlesnitch: ## Stop Little Snitch from blocking the installed app (no identity pinning)
 	@./scripts/littlesnitch-sync.sh /Applications/VibeShare.app
 
-run: app ## Build and launch the app
-	@open "VibeShare.app"
+run: install ## Build, replace the installed app, and launch it
+	@open "/Applications/VibeShare.app"
 
 test: ## Test the Go router
 	@cd router && $(GO) test ./...
