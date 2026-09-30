@@ -166,6 +166,9 @@ struct UsageWindowRow: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack {
                 Text(window.label).font(.caption2)
+                    .help(window.label.hasPrefix("Unidentified Claude limit")
+                          ? "The host sent a usage reading without a model name. Update the host to show named limits when the provider reports them."
+                          : window.label)
                 Spacer()
                 Text(detail).font(.caption2).foregroundStyle(.secondary)
             }

@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -401,8 +402,49 @@ type claudeWindow struct {
 }
 
 func parseClaudeWindows(raw map[string]json.RawMessage) []UsageWindow {
+	// Modern responses describe model scopes explicitly. Prefer these to the
+	// legacy objects, which also contain unrelated/internal codename buckets.
+	var limits []json.RawMessage
+	var windows []UsageWindow
+	if json.Unmarshal(raw["limits"], &limits) == nil {
+		for _, item := range limits {
+			var limit struct {
+				Kind     string   `json:"kind"`
+				Percent  *float64 `json:"percent"`
+				ResetsAt string   `json:"resets_at"`
+				Scope    *struct {
+					Model *struct {
+						DisplayName string `json:"display_name"`
+					} `json:"model"`
+				} `json:"scope"`
+			}
+			if json.Unmarshal(item, &limit) != nil || limit.Percent == nil {
+				continue
+			}
+			label := ""
+			switch limit.Kind {
+			case "session":
+				label = "Session (5h)"
+			case "weekly_all":
+				label = "Weekly"
+			case "weekly_scoped":
+				label = "Weekly · Unidentified model"
+				if limit.Scope != nil && limit.Scope.Model != nil && strings.TrimSpace(limit.Scope.Model.DisplayName) != "" {
+					label = "Weekly · " + strings.TrimSpace(limit.Scope.Model.DisplayName)
+				}
+			default:
+				continue
+			}
+			windows = append(windows, UsageWindow{Label: label, Utilization: *limit.Percent, ResetsAt: limit.ResetsAt})
+		}
+	}
 	keys := make([]string, 0, len(raw))
 	for key := range raw {
+		switch key {
+		case "five_hour", "seven_day", "seven_day_opus", "seven_day_sonnet", "seven_day_fable":
+		default:
+			continue
+		}
 		keys = append(keys, key)
 	}
 	sort.Slice(keys, func(i, j int) bool {
@@ -421,14 +463,48 @@ func parseClaudeWindows(raw map[string]json.RawMessage) []UsageWindow {
 		}
 		return keys[i] < keys[j]
 	})
-	out := []UsageWindow{}
+	out := windows
 	for _, key := range keys {
 		var window claudeWindow
 		if json.Unmarshal(raw[key], &window) != nil || window.Utilization == nil {
 			continue
 		}
 		label := usageLabel(key)
+		// A partial/malformed limits array must not discard the legacy session
+		// reading used by the sharing reserve gate. Named entries still win.
+		found := false
+		for _, w := range out {
+			if w.Label == label {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
 		out = append(out, UsageWindow{Label: label, Utilization: *window.Utilization, ResetsAt: window.ResetsAt})
+	}
+	return out
+}
+
+// Older hosts send humanized internal API keys without model scope metadata.
+// Preserve their readings, but don't imply those keys identify a model.
+func normalizeSharedUsage(snaps map[string]ProviderUsage) map[string]ProviderUsage {
+	out := make(map[string]ProviderUsage, len(snaps))
+	for provider, snap := range snaps {
+		snap.Windows = append([]UsageWindow(nil), snap.Windows...)
+		if provider == "claude" {
+			unidentified := 0
+			for i := range snap.Windows {
+				label := snap.Windows[i].Label
+				if label == "Session (5h)" || label == "Weekly" || strings.HasPrefix(label, "Weekly · ") {
+					continue
+				}
+				unidentified++
+				snap.Windows[i].Label = "Unidentified Claude limit " + fmt.Sprint(unidentified)
+			}
+		}
+		out[provider] = snap
 	}
 	return out
 }

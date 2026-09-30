@@ -2,8 +2,117 @@ package main
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 )
+
+func TestClaudeUsagePrefersNamedStructuredLimits(t *testing.T) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(`{
+		"five_hour":{"utilization":99},
+		"iguana_necktie":{"utilization":12},
+		"nimbus_quill":{"utilization":13},
+		"limits":[
+			{"kind":"session","percent":1,"resets_at":null},
+			{"kind":"weekly_all","percent":22},
+			{"kind":"weekly_scoped","percent":33,"scope":{"model":{"display_name":"Fable"}}},
+			{"kind":"weekly_scoped","percent":44,"scope":{"model":{"display_name":"Sonnet"}}},
+			{"kind":"weekly_scoped","percent":0,"scope":null},
+			{"kind":"future","percent":50},
+			{"kind":"session","percent":null},
+			"malformed"
+		]
+	}`), &raw); err != nil {
+		t.Fatal(err)
+	}
+	got := parseClaudeWindows(raw)
+	want := []UsageWindow{
+		{Label: "Session (5h)", Utilization: 1},
+		{Label: "Weekly", Utilization: 22},
+		{Label: "Weekly · Fable", Utilization: 33},
+		{Label: "Weekly · Sonnet", Utilization: 44},
+		{Label: "Weekly · Unidentified model", Utilization: 0},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
+func TestClaudeLegacyUsageSkipsInternalBuckets(t *testing.T) {
+	for _, limits := range []string{"null", "[]", `[{"kind":"future","percent":50}]`, `"invalid"`} {
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal([]byte(`{
+			"five_hour":{"utilization":0},
+			"seven_day_sonnet":{"utilization":1},
+			"iguana_necktie":{"utilization":12},
+			"nimbus_quill":{"utilization":13},
+			"seven_day_omelette":{"utilization":15},
+			"extra_usage":{"utilization":14},
+			"limits":`+limits+`
+		}`), &raw); err != nil {
+			t.Fatal(err)
+		}
+		got := parseClaudeWindows(raw)
+		if len(got) != 2 || got[0].Label != "Session (5h)" || got[1].Label != "Weekly · Sonnet" {
+			t.Fatalf("limits %s: %+v", limits, got)
+		}
+	}
+}
+
+func TestClaudePartialLimitsPreserveLegacySessionReserve(t *testing.T) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(`{
+		"five_hour":{"utilization":95,"resets_at":"2026-10-01T10:00:00Z"},
+		"seven_day":{"utilization":20},
+		"seven_day_fable":{"utilization":99},
+		"limits":[
+			{"kind":"session","percent":"malformed"},
+			{"kind":"weekly_scoped","percent":12,"scope":{"model":{"display_name":"Fable"}}}
+		]
+	}`), &raw); err != nil {
+		t.Fatal(err)
+	}
+	m := newSubscriptionMonitor("/nonexistent")
+	m.snaps["claude"] = ProviderUsage{UpdatedAt: 1, Windows: parseClaudeWindows(raw)}
+	if util, known := m.SessionUtilization("claude"); !known || util != 95 {
+		t.Fatalf("lost reserve reading: %v, %v", util, known)
+	}
+	if got := m.SessionResetsAt("claude"); got != "2026-10-01T10:00:00Z" {
+		t.Fatalf("lost reset time: %q", got)
+	}
+	shared := sharedUsageForGrant(Grant{Providers: []string{"claude"}}, m.snaps)
+	if len(shared["claude"].Windows) != 3 || shared["claude"].Windows[0].Label != "Weekly · Fable" || shared["claude"].Windows[0].Utilization != 12 {
+		t.Fatalf("incorrect shared windows: %+v", shared)
+	}
+}
+
+func TestSharedClaudeUsageFromOldHostDoesNotGuessModelNames(t *testing.T) {
+	windows := []UsageWindow{
+		{Label: "Session (5h)", Utilization: 1},
+		{Label: "Weekly", Utilization: 31},
+		{Label: "Iguana necktie", Utilization: 2, ResetsAt: "2026-11-05T07:59:00Z"},
+		{Label: "Nimbus quill", Utilization: 3},
+		{Label: "Weekly · Fable", Utilization: 4},
+	}
+	source := map[string]ProviderUsage{
+		"claude": {UpdatedAt: 123, Windows: windows},
+		"codex":  {UpdatedAt: 456, Windows: []UsageWindow{{Label: "Code review · Weekly", Utilization: 5}}},
+	}
+	got := normalizeSharedUsage(source)
+	for i, label := range []string{"Session (5h)", "Weekly", "Unidentified Claude limit 1", "Unidentified Claude limit 2", "Weekly · Fable"} {
+		want := windows[i]
+		want.Label = label
+		if got["claude"].Windows[i] != want {
+			t.Fatalf("window %d = %+v, want %+v", i, got["claude"].Windows[i], want)
+		}
+	}
+	if source["claude"].Windows[2].Label != "Iguana necktie" || got["claude"].UpdatedAt != 123 || !reflect.DeepEqual(got["codex"], source["codex"]) {
+		t.Fatal("normalization changed source data, freshness, or another provider")
+	}
+	if !reflect.DeepEqual(normalizeSharedUsage(got), got) {
+		t.Fatal("normalization is not idempotent")
+	}
+}
 
 func TestClaudeUsageIncludesEveryAvailableWindow(t *testing.T) {
 	var raw map[string]json.RawMessage

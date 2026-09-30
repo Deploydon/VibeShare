@@ -222,7 +222,7 @@ func (g *GuestManager) onEvent(gc *guestConn, ev *nostr.Event) {
 		gc.hostReason = pc.Reason
 		gc.hostLimited = pc.LimitedProviders
 		gc.hostUsage = append([]providerUsageShare(nil), pc.Usage...)
-		gc.hostProviderUsage = pc.ProviderUsage
+		gc.hostProviderUsage = normalizeSharedUsage(pc.ProviderUsage)
 		gc.tokenLimit = pc.TokenLimit
 		gc.tokensUsed = pc.TokensUsed
 		if pc.Revoked {
