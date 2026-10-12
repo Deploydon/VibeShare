@@ -41,11 +41,8 @@ dmg: ## Build VibeShare.app and package a distributable VibeShare-<version>.dmg
 universal-dmg: ## Package a universal VibeShare.app into a .dmg (Intel + Apple Silicon)
 	@UNIVERSAL=1 ./create-dmg.sh
 
-install: app ## Build and install to /Applications
-	@if pgrep -x VibeShare >/dev/null; then echo "Quit the running VibeShare app before installing a new signed build."; exit 1; fi
-	@rm -rf "/Applications/VibeShare.app"
-	@cp -R "VibeShare.app" /Applications/
-	@echo "✅ Installed /Applications/VibeShare.app"
+install: app ## Build and install to /Applications (the ONLY copy; prunes stray builds)
+	@./scripts/install-app.sh VibeShare.app
 	@./scripts/littlesnitch-sync.sh /Applications/VibeShare.app
 
 littlesnitch: ## Stop Little Snitch from blocking the installed app (no identity pinning)
