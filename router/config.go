@@ -84,6 +84,9 @@ type Config struct {
 	// Defaults to "resets", which only times a pause the guest is already told
 	// about. Read it through Config.shareUsageLevel, never directly.
 	ShareUsageLevel string `json:"shareUsageLevel"`
+
+	// Explicit opt-in: share only Codex reset counts/expiries, never IDs or redemption.
+	ShareCodexResetCredits bool `json:"shareCodexResetCredits"`
 }
 
 func defaultConfig() Config {

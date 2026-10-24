@@ -120,6 +120,7 @@ struct ProviderRow: View {
             }
             if usage.hasData, !usage.shownWindows.isEmpty {
                 ForEach(usage.shownWindows) { UsageWindowRow(window: $0) }
+                if let banked = usage.bankedResets { BankedResetsView(banked: banked) }
                 if let err = usage.error, !err.isEmpty {
                     Text("Last refresh failed: \(err)").font(.caption2).foregroundStyle(.orange)
                 }
@@ -190,11 +191,12 @@ struct SharedUsageBars: View {
 
     var body: some View {
         ForEach(usage.keys.sorted(), id: \.self) { provider in
-            if let snapshot = usage[provider], !snapshot.shownWindows.isEmpty {
+            if let snapshot = usage[provider], !snapshot.shownWindows.isEmpty || snapshot.bankedResets != nil {
                 Text("\(provider.capitalized) subscription limits")
                     .font(.caption2).foregroundStyle(.secondary)
                     .padding(.top, 3)
                 ForEach(snapshot.shownWindows) { UsageWindowRow(window: $0) }
+                if let banked = snapshot.bankedResets { BankedResetsView(banked: banked) }
                 if let err = snapshot.error, !err.isEmpty {
                     Text("Last refresh failed: \(err)").font(.caption2).foregroundStyle(.orange)
                 }
@@ -248,6 +250,27 @@ struct UseWithToolsSection: View {
             }
             .padding(6)
             .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.05)))
+        }
+    }
+}
+
+/// Shared by the local provider card and borrowed-account details.
+struct BankedResetsView: View {
+    let banked: BankedResets
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Banked Codex resets: \(banked.count)").font(.caption2).bold()
+            ForEach(Array(banked.expiries.prefix(max(0, banked.count)).enumerated()), id: \.offset) { _, value in
+                if let date = UsageWindow.parseISO(value) {
+                    Text("Expires \(date.formatted(.dateTime.year().month().day().hour().minute().timeZone()))")
+                        .font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    Text("Expiry unavailable").font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            if banked.expiries.count < banked.count {
+                Text("Some expiry dates unavailable").font(.caption2).foregroundStyle(.secondary)
+            }
         }
     }
 }

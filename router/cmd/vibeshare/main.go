@@ -21,7 +21,7 @@ import (
 	"time"
 )
 
-const cliVersion = "1.1.1"
+const cliVersion = "1.1.2"
 
 func main() {
 	args := os.Args[1:]
@@ -88,6 +88,8 @@ stable JSON result on stdout. Set VIBESHARE_JSON=1 for the same thing.
   vibeshare config set identity <name>
   vibeshare config set auto-stop on|off
   vibeshare config set prefer-borrowed on|off
+  vibeshare config set share-codex-resets on|off
+  vibeshare config set share-usage off|resets|windows
   vibeshare config set reserve <1-95>
   vibeshare config set relays <wss-url>...
   vibeshare grants
@@ -170,7 +172,7 @@ func cmdConfig(c *client, args []string, jsonOut bool) error {
 		return c.show("GET", "/api/config", nil, jsonOut, nil)
 	}
 	if args[0] != "set" || len(args) < 3 {
-		return errors.New("usage: vibeshare config set identity|auto-stop|prefer-borrowed|reserve|relays ...")
+		return errors.New("usage: vibeshare config set identity|auto-stop|prefer-borrowed|share-codex-resets|share-usage|reserve|relays ...")
 	}
 	var body map[string]any
 	switch args[1] {
@@ -186,6 +188,16 @@ func cmdConfig(c *client, args []string, jsonOut bool) error {
 			return errors.New("prefer-borrowed expects on or off")
 		}
 		body = map[string]any{"preferBorrowedModels": args[2] == "on"}
+	case "share-codex-resets":
+		if len(args) != 3 || (args[2] != "on" && args[2] != "off") {
+			return errors.New("share-codex-resets expects on or off")
+		}
+		body = map[string]any{"shareCodexResetCredits": args[2] == "on"}
+	case "share-usage":
+		if len(args) != 3 || (args[2] != "off" && args[2] != "resets" && args[2] != "windows") {
+			return errors.New("share-usage expects off, resets, or windows")
+		}
+		body = map[string]any{"shareUsageLevel": args[2]}
 	case "reserve":
 		n, err := strconv.Atoi(args[2])
 		if err != nil || n < 1 || n > 95 {

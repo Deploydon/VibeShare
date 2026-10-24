@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,9 +19,17 @@ import (
 // UpdatedAt is 0 until the first successful fetch; Error carries the last
 // failure reason (without leaking the token) so the UI can show it inline.
 type ProviderUsage struct {
-	UpdatedAt int64         `json:"updatedAt"`
-	Error     string        `json:"error,omitempty"`
-	Windows   []UsageWindow `json:"windows,omitempty"`
+	UpdatedAt    int64         `json:"updatedAt"`
+	Error        string        `json:"error,omitempty"`
+	Windows      []UsageWindow `json:"windows,omitempty"`
+	BankedResets *BankedResets `json:"bankedResets,omitempty"`
+}
+
+// BankedResets is an intentionally minimal, read-only account summary. Nil means
+// unknown/not shared, distinct from a verified zero. Expiries never contain IDs.
+type BankedResets struct {
+	Count    int      `json:"count"`
+	Expiries []string `json:"expiries"` // RFC3339; empty entries mean unknown
 }
 
 // UsageWindow is a single rate-limit window: percent used + reset timestamp.
@@ -46,8 +55,9 @@ type SubscriptionMonitor struct {
 }
 
 type provState struct {
-	refreshing   bool
-	backoffUntil int64
+	accountFingerprint [32]byte
+	refreshing         bool
+	backoffUntil       int64
 }
 
 // usageSource describes how to fetch one provider's usage.
@@ -137,6 +147,12 @@ func (m *SubscriptionMonitor) SessionUtilization(provider string) (float64, bool
 // A full-share grant exposes every monitored provider; a scoped grant never
 // leaks the host's unrelated subscription limits to its recipient.
 func sharedUsageForGrant(g Grant, snaps map[string]ProviderUsage) map[string]ProviderUsage {
+	return disclosedUsageForGrant(g, snaps, true, false)
+}
+
+// Apply each privacy choice independently. Off never leaks reset metadata;
+// enabling reset sharing need not disclose the host's usage percentages.
+func disclosedUsageForGrant(g Grant, snaps map[string]ProviderUsage, windows, resets bool) map[string]ProviderUsage {
 	out := map[string]ProviderUsage{}
 	for key, usage := range snaps {
 		if len(g.Models) > 0 {
@@ -162,10 +178,19 @@ func sharedUsageForGrant(g Grant, snaps map[string]ProviderUsage) map[string]Pro
 				continue
 			}
 		}
-		if usage.UpdatedAt > 0 && len(usage.Windows) > 0 {
-			// Provider error bodies are local diagnostics; only percentages and
-			// reset times belong in the encrypted friend-facing presence.
-			out[key] = ProviderUsage{UpdatedAt: usage.UpdatedAt, Windows: append([]UsageWindow(nil), usage.Windows...)}
+		if usage.UpdatedAt <= 0 {
+			continue
+		}
+		disclosed := ProviderUsage{UpdatedAt: usage.UpdatedAt}
+		if windows {
+			disclosed.Windows = append([]UsageWindow(nil), usage.Windows...)
+		}
+		if resets && key == "codex" && usage.BankedResets != nil {
+			disclosed.BankedResets = &BankedResets{Count: usage.BankedResets.Count,
+				Expiries: append([]string{}, usage.BankedResets.Expiries...)}
+		}
+		if len(disclosed.Windows) > 0 || disclosed.BankedResets != nil {
+			out[key] = disclosed
 		}
 	}
 	return out
@@ -248,6 +273,8 @@ func (m *SubscriptionMonitor) refresh(src usageSource) {
 			st.backoffUntil = time.Now().Add(wait).Unix()
 			snap := m.snaps[src.key]
 			snap.Error = resultErr.Error()
+			// Never advertise possibly stale credits after an auth/upstream failure.
+			snap.BankedResets = nil
 			m.snaps[src.key] = snap
 		} else {
 			usage.UpdatedAt = time.Now().Unix()
@@ -257,6 +284,9 @@ func (m *SubscriptionMonitor) refresh(src usageSource) {
 	}()
 
 	cred, err := m.newestCred(src.credFile)
+	if errors.Is(err, errNoCreds) && src.key == "codex" {
+		cred, err = desktopCodexCred()
+	}
 	if err != nil {
 		resultErr = err
 		return
@@ -269,6 +299,18 @@ func (m *SubscriptionMonitor) refresh(src usageSource) {
 		resultErr = errTokenExpired
 		return
 	}
+	identity := cred.account()
+	if identity == "" {
+		identity = cred.token()
+	}
+	fingerprint := sha256.Sum256([]byte(identity))
+	m.mu.Lock()
+	st := m.pstate[src.key]
+	if st.accountFingerprint != ([32]byte{}) && st.accountFingerprint != fingerprint {
+		delete(m.snaps, src.key) // never carry a previous account into a failed read
+	}
+	st.accountFingerprint = fingerprint
+	m.mu.Unlock()
 	u, status, err := src.fetch(m.client, cred)
 	if err != nil {
 		if status == http.StatusTooManyRequests {
@@ -278,6 +320,34 @@ func (m *SubscriptionMonitor) refresh(src usageSource) {
 		return
 	}
 	usage = u
+}
+
+// Read the standard desktop/CLI OAuth account in place, only when this host has
+// no provider Codex login. Never copy, refresh, write, or log these credentials.
+func desktopCodexCred() (rawCred, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return rawCred{}, errNoCreds
+	}
+	base := os.Getenv("CODEX_HOME")
+	if base == "" {
+		base = filepath.Join(home, ".codex")
+	}
+	data, err := os.ReadFile(filepath.Join(base, "auth.json"))
+	if err != nil {
+		return rawCred{}, errNoCreds
+	}
+	var auth struct {
+		AuthMode string `json:"auth_mode"`
+		Tokens   *struct {
+			AccessToken string `json:"access_token"`
+			AccountID   string `json:"account_id"`
+		} `json:"tokens"`
+	}
+	if json.Unmarshal(data, &auth) != nil || auth.AuthMode != "chatgpt" || auth.Tokens == nil || auth.Tokens.AccessToken == "" {
+		return rawCred{}, errNoCreds
+	}
+	return rawCred{AccessToken: auth.Tokens.AccessToken, AccountID: auth.Tokens.AccountID}, nil
 }
 
 // newestCred reads the freshest matching credential file in the auth dir.
@@ -547,18 +617,66 @@ func fetchCodexUsage(c *http.Client, cr rawCred) (ProviderUsage, int, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<10))
-		return ProviderUsage{}, resp.StatusCode, errors.New("usage endpoint returned " + resp.Status + ": " + strings.TrimSpace(string(body)))
+		return ProviderUsage{}, resp.StatusCode, errors.New("usage endpoint returned " + resp.Status)
 	}
 	var raw map[string]json.RawMessage
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return ProviderUsage{}, resp.StatusCode, err
 	}
-	out := ProviderUsage{Windows: parseCodexWindows(raw)}
+	out := ProviderUsage{Windows: parseCodexWindows(raw), BankedResets: parseBankedResets(raw["rate_limit_reset_credits"])}
+	// The usage endpoint has the count only; the read-only list has expiries.
+	// Failure/429 here must not erase valid usage or invent a zero count.
+	if out.BankedResets == nil || out.BankedResets.Count > 0 {
+		creditsReq := req.Clone(req.Context())
+		u := *req.URL
+		u.Path = "/backend-api/wham/rate-limit-reset-credits"
+		creditsReq.URL = &u
+		if creditsResp, e := c.Do(creditsReq); e == nil {
+			if creditsResp.StatusCode == http.StatusOK {
+				data, e := io.ReadAll(io.LimitReader(creditsResp.Body, 1<<20))
+				if e == nil {
+					if banked := parseBankedResets(data); banked != nil {
+						out.BankedResets = banked
+					}
+				}
+			}
+			creditsResp.Body.Close()
+		}
+	}
 	if len(out.Windows) == 0 {
 		return ProviderUsage{}, resp.StatusCode, errors.New("usage response had no recognizable windows")
 	}
 	return out, resp.StatusCode, nil
+}
+
+// Tolerate absent/new list fields without conflating unavailable with zero.
+func parseBankedResets(data json.RawMessage) *BankedResets {
+	var raw struct {
+		Count   *int `json:"available_count"`
+		Credits []struct {
+			Status    string `json:"status"`
+			ExpiresAt string `json:"expires_at"`
+		} `json:"credits"`
+	}
+	if json.Unmarshal(data, &raw) != nil || raw.Count == nil || *raw.Count < 0 {
+		return nil
+	}
+	out := &BankedResets{Count: *raw.Count, Expiries: []string{}}
+	for _, credit := range raw.Credits {
+		if credit.Status != "available" {
+			continue
+		}
+		expiry := ""
+		if t, err := time.Parse(time.RFC3339Nano, credit.ExpiresAt); err == nil {
+			expiry = t.UTC().Format(time.RFC3339)
+		}
+		out.Expiries = append(out.Expiries, expiry)
+	}
+	sort.Strings(out.Expiries)
+	if len(out.Expiries) > out.Count {
+		out.Expiries = out.Expiries[:out.Count]
+	}
+	return out
 }
 
 func parseCodexWindows(raw map[string]json.RawMessage) []UsageWindow {
@@ -621,6 +739,7 @@ type codexWindow struct {
 	ResetsInSeconds *float64 `json:"resets_in_seconds"`
 	ResetAfterSecs  *float64 `json:"reset_after_seconds"`
 	ResetsAt        string   `json:"resets_at"`
+	ResetAt         *int64   `json:"reset_at"`
 }
 
 func (w *codexWindow) toUsage(label string) *UsageWindow {
@@ -635,6 +754,9 @@ func (w *codexWindow) toUsage(label string) *UsageWindow {
 		util = *w.Utilization
 	}
 	reset := w.ResetsAt
+	if reset == "" && w.ResetAt != nil && *w.ResetAt > 0 {
+		reset = time.Unix(*w.ResetAt, 0).UTC().Format(time.RFC3339)
+	}
 	if reset == "" {
 		secs := -1.0
 		switch {

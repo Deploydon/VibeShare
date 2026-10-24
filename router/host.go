@@ -531,8 +531,10 @@ func (h *HostManager) buildPresence(hg *hostGrant) presenceContent {
 	}
 	u := h.store.Usage(hg.grant.ID)
 	providerUsage := map[string]ProviderUsage{}
-	if h.subUsage != nil && h.store.Config().shareUsageLevel() == shareUsageWindows && !switched {
-		providerUsage = sharedUsageForGrant(hg.grant, h.subUsage.MaybeRefresh())
+	cfg := h.store.Config()
+	if h.subUsage != nil && !switched {
+		providerUsage = disclosedUsageForGrant(hg.grant, h.subUsage.MaybeRefresh(),
+			cfg.shareUsageLevel() == shareUsageWindows, cfg.ShareCodexResetCredits)
 	}
 	return presenceContent{
 		Role:             "host",

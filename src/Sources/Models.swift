@@ -8,6 +8,7 @@ struct RouterStatus: Codable {
     var controlPort: Int
     var identityName: String
     var sharingEnabled: Bool
+    var shareCodexResetCredits: Bool?
     var preferBorrowedModels: Bool?
     var autoStopSharing: Bool?
     var usageReservePercent: Int?
@@ -50,9 +51,15 @@ struct ProviderUsage: Codable {
     var updatedAt: Int64 = 0
     var error: String?
     var windows: [UsageWindow]?
+    var bankedResets: BankedResets?
 
     var hasData: Bool { updatedAt > 0 }
     var shownWindows: [UsageWindow] { windows ?? [] }
+}
+
+struct BankedResets: Codable {
+    var count: Int
+    var expiries: [String]
 }
 
 /// A single rate-limit window (e.g. "Session (5h)", "Weekly") for a provider.
@@ -269,6 +276,7 @@ struct RouterConfigUpdate: Encodable {
     var nostrRelays: [String]? = nil
     var identityName: String? = nil
     var enableSharing: Bool? = nil
+    var shareCodexResetCredits: Bool? = nil
     var preferBorrowedModels: Bool? = nil
     var autoStopSharing: Bool? = nil
     var usageReservePercent: Int? = nil

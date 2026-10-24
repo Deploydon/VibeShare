@@ -73,6 +73,13 @@ struct SettingsTab: View {
         .font(.subheadline)
         .help("Use a friend's share first when both Macs list the same model. Keep this off to use your own subscription first.")
 
+        Toggle("Share banked Codex reset counts and expiry dates", isOn: Binding(
+            get: { controller.status?.shareCodexResetCredits ?? false },
+            set: { on in Task { await controller.setShareCodexResetCredits(on) } }
+        ))
+        .font(.subheadline)
+        .help("Off by default. Shares read-only reset details with friends who have access to your Codex models. Never redeems a reset. Independent of usage-percentage sharing.")
+
         if AppController.launchAtLoginAvailable {
             Toggle("Start VibeShare at login", isOn: Binding(
                 get: { controller.launchAtLogin },

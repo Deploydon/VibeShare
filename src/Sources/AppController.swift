@@ -215,6 +215,13 @@ final class AppController: ObservableObject {
         await refresh()
     }
 
+    func setShareCodexResetCredits(_ enabled: Bool) async {
+        do {
+            try await client.updateConfig(RouterConfigUpdate(shareCodexResetCredits: enabled))
+        } catch { softError = error.localizedDescription }
+        await refresh()
+    }
+
     func setPreferBorrowedModels(_ enabled: Bool) async {
         do {
             try await client.updateConfig(RouterConfigUpdate(preferBorrowedModels: enabled))

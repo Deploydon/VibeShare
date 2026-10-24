@@ -251,3 +251,23 @@ own risk.**
 ## License
 
 MIT 
+
+### Banked Codex resets (1.1.2)
+
+`vibeshare --json usage` shows the local Codex account's banked free reset
+count and expiry dates when available (`bankedResets`). Unknown is omitted,
+not reported as zero. This is read-only: no credit can be redeemed by VibeShare.
+The provider's Codex login is used first; if none exists, the local standard
+`$CODEX_HOME/auth.json` (default `~/.codex/auth.json`) ChatGPT OAuth login is
+read in place without copying or refreshing it.
+
+Sharing this metadata is **off by default**, including on upgrade. Enable it
+in Settings or with `vibeshare config set share-codex-resets on`; disable it
+with `vibeshare config set share-codex-resets off`. Check it with
+`vibeshare --json config`. Only friends with access to Codex receive the count
+and expiries, never credit IDs, account IDs, tokens, or redemption controls.
+It is independent of percentage disclosure (`vibeshare config set share-usage
+off|resets|windows`). Paused/revoked grants do not receive it. Older hosts send
+no field and are not treated as having zero credits. Old guests ignore the
+new optional field. Turning it off removes it from subsequent presence
+updates; previously received information cannot be recalled from a recipient.

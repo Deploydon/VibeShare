@@ -13,9 +13,9 @@ import (
 )
 
 // appVersion is the router build agents and the menu bar can report.
-// 1.1.1 keeps the 1.0 offer/answer/ice frames so a newer guest still talks to
+// 1.1.2 keeps the 1.0 offer/answer/ice frames so a newer guest still talks to
 // a friend who has not installed this build yet.
-const appVersion = "1.1.1"
+const appVersion = "1.1.2"
 
 const (
 	// connectTimeout is how long a guest waits for a friend's data channel to
